@@ -1,16 +1,18 @@
 const express = require('express');
 const mysql = require('mysql2');
 const bodyParser = require('body-parser');
+require('dotenv').config();
 
 const app = express();
 const port = 3000;
 
-// Conexión a la base de datos MySQL
+// Conexión a la base de datos MySQL usando las variables de entorno
 const db = mysql.createConnection({
-	host: 'localhost',
-	user: 'root', // Asegúrate de poner tu usuario de MySQL
-	password: '', // Asegúrate de poner tu contraseña de MySQL
-	database: 'crud_api',
+	host: process.env.DB_HOST,
+	user: process.env.DB_USER,
+	password: process.env.DB_PASSWORD,
+	database: process.env.DB_NAME,
+	port: process.env.DB_PORT,
 });
 
 db.connect((err) => {
@@ -29,11 +31,6 @@ app.get('/users', (req, res) => {
 	});
 });
 
-// Iniciar servidor
-app.listen(port, () => {
-	console.log(`Servidor corriendo en http://localhost:${port}`);
-});
-
 // Endpoint para agregar un nuevo usuario
 app.post('/users', (req, res) => {
 	const { first_name, last_name, email, password, birthday } = req.body;
@@ -50,4 +47,9 @@ app.post('/users', (req, res) => {
 			});
 		},
 	);
+});
+
+// Iniciar servidor
+app.listen(port, () => {
+	console.log(`Servidor corriendo en http://localhost:${port}`);
 });
