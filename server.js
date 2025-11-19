@@ -57,3 +57,8 @@ app.post('/users', (req, res) => {
 app.listen(port, () => {
 	console.log(`Servidor corriendo en http://localhost:${port}`);
 });
+
+// Ruta raíz
+app.get('/', (req, res) => {
+	res.send('¡El servidor está funcionando!');
+});
