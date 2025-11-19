@@ -6,7 +6,7 @@ require('dotenv').config();
 const app = express();
 const port = 3000;
 
-// Conexión a la base de datos MySQL usando las variables de entorno
+// Conexión a la base de datos usando las variables de entorno
 const db = mysql.createConnection({
 	host: process.env.DB_HOST,
 	user: process.env.DB_USER,
@@ -15,9 +15,13 @@ const db = mysql.createConnection({
 	port: process.env.DB_PORT,
 });
 
+// Conexión exitosa a la base de datos
 db.connect((err) => {
-	if (err) throw err;
-	console.log('Conectado a la base de datos!');
+	if (err) {
+		console.error('Error al conectar a la base de datos', err);
+	} else {
+		console.log('Conexión exitosa a la base de datos');
+	}
 });
 
 // Middleware
