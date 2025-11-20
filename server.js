@@ -19,6 +19,9 @@ const pool = new Pool({
 	ssl: {
 		rejectUnauthorized: false,
 	},
+	max: 2, // Máximo 2 conexiones simultáneas (plan gratuito)
+	idleTimeoutMillis: 30000, // Cerrar conexiones inactivas después de 30 segundos
+	connectionTimeoutMillis: 10000, // Timeout de conexión de 10 segundos
 });
 
 // Test connection
@@ -318,5 +321,5 @@ app.use((req, res) => {
 // Iniciar servidor
 app.listen(port, () => {
 	console.log(`✅ Servidor corriendo en http://localhost:${port}`);
-	console.log(`📱 Desplegado en: https://mi-api-nsj1.onrender.com`);
+	console.log(`📱 Desplegado en: https://mi-api-ns1j.onrender.com`);
 });
