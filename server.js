@@ -1,5 +1,5 @@
 const express = require('express');
-const mysql = require('mysql2/promise');
+const { Pool } = require('pg');
 const bodyParser = require('body-parser');
 const bcrypt = require('bcrypt');
 const cors = require('cors');
@@ -13,28 +13,22 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(express.json());
 
-// Connection pool para mejor rendimiento
-const pool = mysql.createPool({
-	host: process.env.DB_HOST,
-	user: process.env.DB_USER,
-	password: process.env.DB_PASSWORD,
-	database: process.env.DB_NAME,
-	port: process.env.DB_PORT,
-	waitForConnections: true,
-	connectionLimit: 10,
-	queueLimit: 0,
+// PostgreSQL Connection Pool
+const pool = new Pool({
+	connectionString: process.env.DATABASE_URL,
+	ssl: {
+		rejectUnauthorized: false,
+	},
 });
 
 // Test connection
-pool
-	.getConnection()
-	.then((connection) => {
-		console.log('✅ Conexión exitosa a la base de datos');
-		connection.release();
-	})
-	.catch((err) => {
+pool.query('SELECT NOW()', (err, res) => {
+	if (err) {
 		console.error('❌ Error al conectar a la base de datos:', err);
-	});
+	} else {
+		console.log('✅ Conexión exitosa a la base de datos PostgreSQL');
+	}
+});
 
 // Ruta raíz
 app.get('/', (req, res) => {
@@ -55,13 +49,13 @@ app.get('/', (req, res) => {
 // 1. GET /users - Obtener todos los usuarios
 app.get('/users', async (req, res) => {
 	try {
-		const [rows] = await pool.query(
-			'SELECT id, first_name, last_name, email, birthday, created_at FROM users',
+		const result = await pool.query(
+			'SELECT id, first_name, last_name, email, birthday, created_at FROM users ORDER BY id',
 		);
 		res.json({
 			success: true,
-			data: rows,
-			count: rows.length,
+			data: result.rows,
+			count: result.rows.length,
 		});
 	} catch (error) {
 		console.error('Error al obtener usuarios:', error);
@@ -77,12 +71,12 @@ app.get('/users', async (req, res) => {
 app.get('/users/:id', async (req, res) => {
 	try {
 		const { id } = req.params;
-		const [rows] = await pool.query(
-			'SELECT id, first_name, last_name, email, birthday, created_at FROM users WHERE id = ?',
+		const result = await pool.query(
+			'SELECT id, first_name, last_name, email, birthday, created_at FROM users WHERE id = $1',
 			[id],
 		);
 
-		if (rows.length === 0) {
+		if (result.rows.length === 0) {
 			return res.status(404).json({
 				success: false,
 				message: 'Usuario no encontrado',
@@ -91,7 +85,7 @@ app.get('/users/:id', async (req, res) => {
 
 		res.json({
 			success: true,
-			data: rows[0],
+			data: result.rows[0],
 		});
 	} catch (error) {
 		console.error('Error al obtener usuario:', error);
@@ -127,12 +121,12 @@ app.post('/users', async (req, res) => {
 		}
 
 		// Verificar si el email ya existe
-		const [existingUsers] = await pool.query(
-			'SELECT id FROM users WHERE email = ?',
+		const existingUser = await pool.query(
+			'SELECT id FROM users WHERE email = $1',
 			[email],
 		);
 
-		if (existingUsers.length > 0) {
+		if (existingUser.rows.length > 0) {
 			return res.status(409).json({
 				success: false,
 				message: 'El email ya está registrado',
@@ -143,21 +137,21 @@ app.post('/users', async (req, res) => {
 		const hashedPassword = await bcrypt.hash(password, 10);
 
 		// Insertar usuario
-		const [result] = await pool.query(
-			'INSERT INTO users (first_name, last_name, email, password, birthday) VALUES (?, ?, ?, ?, ?)',
+		const result = await pool.query(
+			'INSERT INTO users (first_name, last_name, email, password, birthday) VALUES ($1, $2, $3, $4, $5) RETURNING id',
 			[first_name, last_name, email, hashedPassword, birthday || null],
 		);
 
 		// Obtener el usuario creado
-		const [newUser] = await pool.query(
-			'SELECT id, first_name, last_name, email, birthday, created_at FROM users WHERE id = ?',
-			[result.insertId],
+		const newUser = await pool.query(
+			'SELECT id, first_name, last_name, email, birthday, created_at FROM users WHERE id = $1',
+			[result.rows[0].id],
 		);
 
 		res.status(201).json({
 			success: true,
 			message: 'Usuario creado exitosamente',
-			data: newUser[0],
+			data: newUser.rows[0],
 		});
 	} catch (error) {
 		console.error('Error al crear usuario:', error);
@@ -176,12 +170,12 @@ app.put('/users/:id', async (req, res) => {
 		const { first_name, last_name, email, password, birthday } = req.body;
 
 		// Verificar si el usuario existe
-		const [existingUser] = await pool.query(
-			'SELECT id FROM users WHERE id = ?',
+		const existingUser = await pool.query(
+			'SELECT id FROM users WHERE id = $1',
 			[id],
 		);
 
-		if (existingUser.length === 0) {
+		if (existingUser.rows.length === 0) {
 			return res.status(404).json({
 				success: false,
 				message: 'Usuario no encontrado',
@@ -191,14 +185,17 @@ app.put('/users/:id', async (req, res) => {
 		// Construir query dinámicamente
 		let updateFields = [];
 		let values = [];
+		let paramCount = 1;
 
 		if (first_name) {
-			updateFields.push('first_name = ?');
+			updateFields.push(`first_name = $${paramCount}`);
 			values.push(first_name);
+			paramCount++;
 		}
 		if (last_name) {
-			updateFields.push('last_name = ?');
+			updateFields.push(`last_name = $${paramCount}`);
 			values.push(last_name);
+			paramCount++;
 		}
 		if (email) {
 			// Validar formato de email
@@ -211,29 +208,32 @@ app.put('/users/:id', async (req, res) => {
 			}
 
 			// Verificar si el email ya existe (excepto el usuario actual)
-			const [emailCheck] = await pool.query(
-				'SELECT id FROM users WHERE email = ? AND id != ?',
+			const emailCheck = await pool.query(
+				'SELECT id FROM users WHERE email = $1 AND id != $2',
 				[email, id],
 			);
 
-			if (emailCheck.length > 0) {
+			if (emailCheck.rows.length > 0) {
 				return res.status(409).json({
 					success: false,
 					message: 'El email ya está registrado por otro usuario',
 				});
 			}
 
-			updateFields.push('email = ?');
+			updateFields.push(`email = $${paramCount}`);
 			values.push(email);
+			paramCount++;
 		}
 		if (password) {
 			const hashedPassword = await bcrypt.hash(password, 10);
-			updateFields.push('password = ?');
+			updateFields.push(`password = $${paramCount}`);
 			values.push(hashedPassword);
+			paramCount++;
 		}
 		if (birthday !== undefined) {
-			updateFields.push('birthday = ?');
+			updateFields.push(`birthday = $${paramCount}`);
 			values.push(birthday);
+			paramCount++;
 		}
 
 		if (updateFields.length === 0) {
@@ -243,22 +243,24 @@ app.put('/users/:id', async (req, res) => {
 			});
 		}
 
+		updateFields.push(`updated_at = CURRENT_TIMESTAMP`);
 		values.push(id);
+
 		await pool.query(
-			`UPDATE users SET ${updateFields.join(', ')} WHERE id = ?`,
+			`UPDATE users SET ${updateFields.join(', ')} WHERE id = $${paramCount}`,
 			values,
 		);
 
 		// Obtener el usuario actualizado
-		const [updatedUser] = await pool.query(
-			'SELECT id, first_name, last_name, email, birthday, created_at, updated_at FROM users WHERE id = ?',
+		const updatedUser = await pool.query(
+			'SELECT id, first_name, last_name, email, birthday, created_at, updated_at FROM users WHERE id = $1',
 			[id],
 		);
 
 		res.json({
 			success: true,
 			message: 'Usuario actualizado exitosamente',
-			data: updatedUser[0],
+			data: updatedUser.rows[0],
 		});
 	} catch (error) {
 		console.error('Error al actualizar usuario:', error);
@@ -276,12 +278,12 @@ app.delete('/users/:id', async (req, res) => {
 		const { id } = req.params;
 
 		// Verificar si el usuario existe
-		const [existingUser] = await pool.query(
-			'SELECT id FROM users WHERE id = ?',
+		const existingUser = await pool.query(
+			'SELECT id FROM users WHERE id = $1',
 			[id],
 		);
 
-		if (existingUser.length === 0) {
+		if (existingUser.rows.length === 0) {
 			return res.status(404).json({
 				success: false,
 				message: 'Usuario no encontrado',
@@ -289,7 +291,7 @@ app.delete('/users/:id', async (req, res) => {
 		}
 
 		// Eliminar usuario
-		await pool.query('DELETE FROM users WHERE id = ?', [id]);
+		await pool.query('DELETE FROM users WHERE id = $1', [id]);
 
 		res.json({
 			success: true,
